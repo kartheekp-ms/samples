@@ -25,7 +25,7 @@ public static class PipeJsonSerializer
         options ??= new JsonSerializerOptions();
 
         // DeserializeAsync works over a Stream; PipeReader can be viewed as one.
-        using var stream = reader.AsStream(leaveOpen: true);
+        using var stream = reader.AsStream();
         var result = await JsonSerializer.DeserializeAsync<T>(stream, options);
 
         await reader.CompleteAsync();
