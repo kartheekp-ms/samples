@@ -9,7 +9,6 @@ public static class PipeJsonSerializer
     {
         options ??= new JsonSerializerOptions { WriteIndented = false };
 
-        // PipeWriter implements IBufferWriter<byte>, so Utf8JsonWriter can write directly into it.
         await using (var jsonWriter = new Utf8JsonWriter(writer))
         {
             JsonSerializer.Serialize(jsonWriter, value, options);
@@ -24,7 +23,6 @@ public static class PipeJsonSerializer
     {
         options ??= new JsonSerializerOptions();
 
-        // DeserializeAsync works over a Stream; PipeReader can be viewed as one.
         using var stream = reader.AsStream();
         var result = await JsonSerializer.DeserializeAsync<T>(stream, options);
 
