@@ -2,5 +2,7 @@
   <Project Path="PipeJsonDemo/PipeJsonDemo.csproj" />
   <Project Path="PipeJsonDemo.Tests/PipeJsonDemo.Tests.csproj" />
   <Project Path="JsonSerializer.Core/JsonSerializer.Core.csproj" />
+  <Project Path="CommandLineDemo.Tests/CommandLineDemo.Tests.csproj" />
+  <Project Path="CommandLineDemo/CommandLineDemo.csproj" />
   <Project Path="JsonSerializer.Core.Tests/JsonSerializer.Core.Tests.csproj" />
 </Solution>
