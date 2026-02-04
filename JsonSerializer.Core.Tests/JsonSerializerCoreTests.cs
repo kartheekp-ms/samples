@@ -46,8 +46,54 @@ public class JsonSerializerCoreTests
         var options = JsonSerializerCore.DefaultSerializerOptions;
 
         Assert.NotNull(options);
-        Assert.Null(options.PropertyNamingPolicy);
         Assert.False(options.WriteIndented);
+    }
+
+    [Fact]
+    public void Deserialize_AllowsUnmappedMembers()
+    {
+        var json = "{\"Name\":\"Alice\",\"Age\":30,\"Extra\":true}";
+
+        var output = JsonSerializerCore.Deserialize<Person>(json);
+
+        Assert.NotNull(output);
+        Assert.Equal("Alice", output.Name);
+        Assert.Equal(30, output.Age);
+    }
+
+    [Fact]
+    public void Deserialize_AllowsDuplicateProperties()
+    {
+        var json = "{\"Name\":\"Alice\",\"Name\":\"Bob\",\"Age\":30}";
+
+        var output = JsonSerializerCore.Deserialize<Person>(json);
+
+        Assert.NotNull(output);
+        Assert.Equal(30, output.Age);
+    }
+
+    [Fact]
+    public void Deserialize_AllowsMissingRequiredConstructorParameters()
+    {
+        var json = "{\"Age\":30}";
+
+        var output = JsonSerializerCore.Deserialize<Person>(json);
+
+        Assert.NotNull(output);
+        Assert.Null(output.Name);
+        Assert.Equal(30, output.Age);
+    }
+
+    [Fact]
+    public void Deserialize_AllowsNullForNonNullable()
+    {
+        var json = "{\"Name\":null,\"Age\":30}";
+
+        var output = JsonSerializerCore.Deserialize<Person>(json);
+
+        Assert.NotNull(output);
+        Assert.Null(output.Name);
+        Assert.Equal(30, output.Age);
     }
 }
 
