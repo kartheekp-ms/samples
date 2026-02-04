@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="PipeJsonDemo/PipeJsonDemo.csproj" />
   <Project Path="PipeJsonDemo.Tests/PipeJsonDemo.Tests.csproj" />
+  <Project Path="JsonSerializer.Core/JsonSerializer.Core.csproj" />
+  <Project Path="JsonSerializer.Core.Tests/JsonSerializer.Core.Tests.csproj" />
 </Solution>
