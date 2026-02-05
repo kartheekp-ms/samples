@@ -5,4 +5,6 @@
   <Project Path="CommandLineDemo.Tests/CommandLineDemo.Tests.csproj" />
   <Project Path="CommandLineDemo/CommandLineDemo.csproj" />
   <Project Path="JsonSerializer.Core.Tests/JsonSerializer.Core.Tests.csproj" />
+  <Project Path="CommandLineLegacy/CommandLineLegacy.csproj" />
+  <Project Path="CommandLineLegacy.Tests/CommandLineLegacy.Tests.csproj" />
 </Solution>
