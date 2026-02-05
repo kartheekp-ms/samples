@@ -1,17 +1,18 @@
 using System.CommandLine;
 using System.CommandLine.IO;
+using System.CommandLine.Parsing;
 
 namespace CommandLineLegacy.Tests;
 
 public class CommandLineLegacyTests
 {
     [Fact]
-    public void Greet_WithOptions_PrintsExpectedOutput()
+    public async Task Greet_WithOptions_PrintsExpectedOutput()
     {
-        var app = CommandLineLegacyApp.Build();
         var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
 
-        var exitCode = app.Invoke(new[] { "greet", "Mona", "--times", "2", "--excited" }, console);
+        var exitCode = await parser.InvokeAsync(new[] { "greet", "Mona", "--times", "2", "--excited" }, console);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, console.Error.ToString()?.Trim() ?? string.Empty);
@@ -19,12 +20,12 @@ public class CommandLineLegacyTests
     }
 
     [Fact]
-    public void Greet_DefaultsToSingleGreeting()
+    public async Task Greet_DefaultsToSingleGreeting()
     {
-        var app = CommandLineLegacyApp.Build();
         var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
 
-        var exitCode = app.Invoke(new[] { "greet", "Sam" }, console);
+        var exitCode = await parser.InvokeAsync(new[] { "greet", "Sam" }, console);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, console.Error.ToString()?.Trim() ?? string.Empty);
@@ -32,12 +33,49 @@ public class CommandLineLegacyTests
     }
 
     [Fact]
-    public void Sum_WithAbsoluteAndJsonFormat_PrintsExpectedOutput()
+    public async Task Greet_WithVerbose_PrintsVerboseOutput()
     {
-        var app = CommandLineLegacyApp.Build();
         var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
 
-        var exitCode = app.Invoke(new[] { "sum", "1", "2", "3", "--absolute", "--format", "json" }, console);
+        var exitCode = await parser.InvokeAsync(new[] { "greet", "Sam", "--verbose" }, console);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("[VERBOSE]", console.Out.ToString());
+        Assert.Contains("Hello, Sam.", console.Out.ToString());
+    }
+
+    [Fact]
+    public async Task Greet_NameTooShort_ReturnsValidationError()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "greet", "X" }, console);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("at least 2 characters", console.Error.ToString());
+    }
+
+    [Fact]
+    public async Task Greet_TimesOutOfRange_ReturnsValidationError()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "greet", "Sam", "--times", "999" }, console);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("between 1 and 100", console.Error.ToString());
+    }
+
+    [Fact]
+    public async Task Sum_WithAbsoluteAndJsonFormat_PrintsExpectedOutput()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "sum", "1", "2", "3", "--absolute", "--format", "json" }, console);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, console.Error.ToString()?.Trim() ?? string.Empty);
@@ -45,15 +83,76 @@ public class CommandLineLegacyTests
     }
 
     [Fact]
-    public void Sum_InvalidNumber_ReturnsError()
+    public async Task Sum_WithXmlFormat_PrintsXmlOutput()
     {
-        var app = CommandLineLegacyApp.Build();
         var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
 
-        var exitCode = app.Invoke(new[] { "sum", "1", "oops" }, console);
+        var exitCode = await parser.InvokeAsync(new[] { "sum", "1", "2", "3", "--format", "xml" }, console);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("<result><sum>6</sum></result>", console.Out.ToString()?.Trim());
+    }
+
+    [Fact]
+    public async Task Sum_InvalidNumber_ReturnsError()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "sum", "1", "oops" }, console);
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Invalid number: oops", console.Error.ToString());
+    }
+
+    [Fact]
+    public async Task Sum_InvalidFormat_ReturnsError()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "sum", "1", "2", "--format", "csv" }, console);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Invalid format: csv", console.Error.ToString());
+    }
+
+    [Fact]
+    public async Task Sum_Stats_PrintsStatistics()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "sum", "1", "2", "3", "stats", "--median" }, console);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Sum: 6", console.Out.ToString());
+        Assert.Contains("Median:", console.Out.ToString());
+    }
+
+    [Fact]
+    public async Task Config_ValidPath_PrintsPath()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "config", "somefile.json" }, console);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Config path: somefile.json", console.Out.ToString());
+    }
+
+    [Fact]
+    public async Task Config_ValidateNonExistent_ReturnsError()
+    {
+        var console = new TestConsole();
+        var parser = CommandLineLegacyApp.Build(console);
+
+        var exitCode = await parser.InvokeAsync(new[] { "config", "nonexistent.json", "--validate" }, console);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Config file not found", console.Error.ToString());
     }
 }
 
