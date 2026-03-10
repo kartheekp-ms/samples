@@ -13,7 +13,12 @@ public record CliResult(int ExitCode, string StdOut, string StdErr);
 /// </summary>
 public static class CliRunner
 {
-    private static readonly Lazy<string> ExePath = new(FindExecutable);
+    private static readonly Lazy<string> ExePath = new(() =>
+    {
+        var path = FindExecutable();
+        Console.WriteLine($"[CliRunner] Using executable: {path}");
+        return path;
+    });
 
     private static string FindExecutable()
     {
@@ -43,15 +48,33 @@ public static class CliRunner
         var tfm = parts[^1];           // net10.0
         var config = parts[^2];        // Debug or Release
 
-        var exePath = Path.Combine(dir.FullName, "SCNativeAOTDemo", "bin", config, tfm, exeName);
+        var projectBin = Path.Combine(dir.FullName, "SCNativeAOTDemo", "bin", config, tfm);
 
-        if (!File.Exists(exePath))
+        // Prefer the Native AOT published binary over the managed build.
+        // AOT publish output: bin/{config}/{tfm}/{rid}/publish/{exeName}
+        var publishDir = new DirectoryInfo(projectBin);
+        if (publishDir.Exists)
         {
-            throw new FileNotFoundException(
-                $"Executable not found at {exePath}. Build the SCNativeAOTDemo project first.");
+            foreach (var ridDir in publishDir.GetDirectories())
+            {
+                var aotPath = Path.Combine(ridDir.FullName, "publish", exeName);
+                if (File.Exists(aotPath))
+                {
+                    return aotPath;
+                }
+            }
         }
 
-        return exePath;
+        // Fall back to the managed build output.
+        var managedPath = Path.Combine(projectBin, exeName);
+        if (File.Exists(managedPath))
+        {
+            return managedPath;
+        }
+
+        throw new FileNotFoundException(
+            $"Executable not found. Publish the SCNativeAOTDemo project with 'dotnet publish' (Native AOT) " +
+            $"or build with 'dotnet build'. Searched under {projectBin}");
     }
 
     /// <summary>
