@@ -3,6 +3,7 @@ using System.CommandLine.Builder;
 using System.CommandLine.Invocation;
 using System.CommandLine.Parsing;
 using System.Globalization;
+using System.Reflection;
 
 namespace SCNativeAOTDemo;
 
@@ -21,12 +22,57 @@ public record DateRange(DateTime Start, DateTime End);
 /// </summary>
 public enum OutputFormat { Text, Csv, Json }
 
+#region Validation Attributes
+
+[AttributeUsage(AttributeTargets.Property)]
+public class ValidRangeAttribute : Attribute
+{
+    public int Min { get; }
+    public int Max { get; }
+    public ValidRangeAttribute(int min, int max) { Min = min; Max = max; }
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class ValidValuesAttribute : Attribute
+{
+    public string[] Values { get; }
+    public ValidValuesAttribute(params string[] values) { Values = values; }
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class RequiredFieldAttribute : Attribute
+{
+    public string ErrorMessage { get; }
+    public RequiredFieldAttribute(string errorMessage) { ErrorMessage = errorMessage; }
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class MaxFieldLengthAttribute : Attribute
+{
+    public int MaxLength { get; }
+    public string ErrorMessage { get; }
+    public MaxFieldLengthAttribute(int maxLength, string errorMessage) { MaxLength = maxLength; ErrorMessage = errorMessage; }
+}
+
+[AttributeUsage(AttributeTargets.Property)]
+public class DynamicEnumTypeAttribute : Attribute
+{
+    public string EnumTypeName { get; }
+    public DynamicEnumTypeAttribute(string enumTypeName) { EnumTypeName = enumTypeName; }
+}
+
+#endregion
+
 #region Model Classes
 
 public class EchoModel
 {
+    [RequiredField("Message cannot be empty or whitespace.")]
     public string Message { get; set; } = "";
+
+    [ValidRange(1, 50)]
     public int Repeat { get; set; } = 1;
+
     public bool Uppercase { get; set; }
     public bool Reverse { get; set; }
     public bool Verbose { get; set; }
@@ -35,8 +81,13 @@ public class EchoModel
 public class CalcModel
 {
     public string[] Numbers { get; set; } = Array.Empty<string>();
+
+    [ValidValues("sum", "product", "avg", "min", "max")]
     public string Operation { get; set; } = "sum";
+
+    [ValidRange(0, 10)]
     public int Precision { get; set; } = 2;
+
     public bool Verbose { get; set; }
 }
 
@@ -49,8 +100,13 @@ public class CalcStatsModel
 
 public class TaskModel
 {
+    [RequiredField("Title cannot be empty.")]
+    [MaxFieldLength(100, "Title must be 100 characters or fewer.")]
     public string Title { get; set; } = "";
+
+    [DynamicEnumType("SCNativeAOTDemo.Priority")]
     public string Priority { get; set; } = "medium";
+
     public string? Due { get; set; }
     public string[]? Tags { get; set; }
     public bool Verbose { get; set; }
@@ -59,7 +115,10 @@ public class TaskModel
 public class EnumInfoModel
 {
     public string EnumName { get; set; } = "Priority";
+
+    [DynamicEnumType("SCNativeAOTDemo.OutputFormat")]
     public string Format { get; set; } = "Text";
+
     public bool ShowAll { get; set; }
     public bool Verbose { get; set; }
 }
@@ -67,14 +126,50 @@ public class EnumInfoModel
 #endregion
 
 /// <summary>
-/// AOT-safe helpers for type conversion and enum introspection.
+/// Helper for type conversion and model binding.
 /// </summary>
-public static class AotSafeHelpers
+public static class ReflectionBinder
 {
     /// <summary>
-    /// Creates a DateRange from a "start..end" formatted string.
+    /// Converts a string value to a target type.
     /// </summary>
-    public static DateRange? CreateDateRange(string? value)
+    public static object? DynamicConvert(string? value, string targetTypeName)
+    {
+        if (value is null) return null;
+
+        var targetType = Type.GetType(targetTypeName);
+        if (targetType is null) return value;
+
+        if (targetType.IsEnum)
+        {
+            return Enum.Parse(targetType, value, ignoreCase: true);
+        }
+
+        return Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Sets a property on a model object.
+    /// </summary>
+    public static void SetProperty<T>(T model, string propertyName, object? value)
+    {
+        var property = typeof(T).GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        property?.SetValue(model, value);
+    }
+
+    /// <summary>
+    /// Reads a validation attribute from a model property.
+    /// </summary>
+    public static TAttr? GetValidationAttribute<TModel, TAttr>(string propertyName) where TAttr : Attribute
+    {
+        var property = typeof(TModel).GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        return property?.GetCustomAttribute<TAttr>();
+    }
+
+    /// <summary>
+    /// Creates a DateRange from a string value.
+    /// </summary>
+    public static object? CreateDateRange(string? value)
     {
         if (value is null) return null;
 
@@ -87,22 +182,19 @@ public static class AotSafeHelpers
             return null;
         }
 
-        return new DateRange(start, end);
+        var dateRangeType = Type.GetType("SCNativeAOTDemo.DateRange")!;
+        var ctor = dateRangeType.GetConstructors().First();
+        return ctor.Invoke(new object[] { start, end });
     }
 
     /// <summary>
-    /// Gets enum names and integer values for a compile-time known enum type.
+    /// Resolves enum values by type name.
     /// </summary>
-    public static List<(string Name, int Value)> GetEnumValues<TEnum>() where TEnum : struct, Enum
+    public static (Array values, string[] names) GetEnumInfo(string enumTypeName)
     {
-        var names = Enum.GetNames<TEnum>();
-        var values = Enum.GetValues<TEnum>();
-        var result = new List<(string Name, int Value)>();
-        for (var i = 0; i < names.Length; i++)
-        {
-            result.Add((names[i], Convert.ToInt32(values[i])));
-        }
-        return result;
+        var enumType = Type.GetType(enumTypeName)
+            ?? throw new InvalidOperationException($"Cannot resolve type: {enumTypeName}");
+        return (Enum.GetValues(enumType), Enum.GetNames(enumType));
     }
 }
 
@@ -116,9 +208,10 @@ public static class EchoCommandExtensions
         messageArgument.AddValidator(result =>
         {
             var value = result.GetValueForArgument(messageArgument);
-            if (string.IsNullOrWhiteSpace(value))
+            var attr = ReflectionBinder.GetValidationAttribute<EchoModel, RequiredFieldAttribute>("Message");
+            if (attr is not null && string.IsNullOrWhiteSpace(value))
             {
-                result.ErrorMessage = "Message cannot be empty or whitespace.";
+                result.ErrorMessage = attr.ErrorMessage;
             }
         });
 
@@ -128,9 +221,12 @@ public static class EchoCommandExtensions
             var value = result.GetValueForOption(repeatOption);
             if (value is null) return;
 
-            if (!int.TryParse(value, out var intValue) || intValue < 1 || intValue > 50)
+            var rangeAttr = ReflectionBinder.GetValidationAttribute<EchoModel, ValidRangeAttribute>("Repeat");
+            if (rangeAttr is null) return;
+
+            if (!int.TryParse(value, out var intValue) || intValue < rangeAttr.Min || intValue > rangeAttr.Max)
             {
-                result.ErrorMessage = "Repeat count must be between 1 and 50.";
+                result.ErrorMessage = $"Repeat count must be between {rangeAttr.Min} and {rangeAttr.Max}.";
             }
         });
 
@@ -147,14 +243,15 @@ public static class EchoCommandExtensions
         {
             var cancellationToken = context.GetCancellationToken();
 
-            var model = new EchoModel
-            {
-                Message = context.ParseResult.GetValueForArgument(messageArgument),
-                Repeat = int.Parse(context.ParseResult.GetValueForOption(repeatOption)!, CultureInfo.InvariantCulture),
-                Uppercase = context.ParseResult.GetValueForOption(uppercaseOption),
-                Reverse = context.ParseResult.GetValueForOption(reverseOption),
-                Verbose = context.ParseResult.GetValueForOption(verboseOption)
-            };
+            var model = new EchoModel();
+            ReflectionBinder.SetProperty(model, "Message", context.ParseResult.GetValueForArgument(messageArgument));
+
+            var repeatStr = context.ParseResult.GetValueForOption(repeatOption);
+            ReflectionBinder.SetProperty(model, "Repeat", (int)ReflectionBinder.DynamicConvert(repeatStr, "System.Int32")!);
+
+            ReflectionBinder.SetProperty(model, "Uppercase", context.ParseResult.GetValueForOption(uppercaseOption));
+            ReflectionBinder.SetProperty(model, "Reverse", context.ParseResult.GetValueForOption(reverseOption));
+            ReflectionBinder.SetProperty(model, "Verbose", context.ParseResult.GetValueForOption(verboseOption));
 
             if (model.Uppercase)
             {
@@ -201,8 +298,8 @@ public static class CalcCommandExtensions
         operationOption.AddValidator(result =>
         {
             var value = result.GetValueForOption(operationOption);
-            string[] validOperations = ["sum", "product", "avg", "min", "max"];
-            if (value is not null && !validOperations.Contains(value, StringComparer.OrdinalIgnoreCase))
+            var attr = ReflectionBinder.GetValidationAttribute<CalcModel, ValidValuesAttribute>("Operation");
+            if (attr is not null && value is not null && !attr.Values.Contains(value, StringComparer.OrdinalIgnoreCase))
             {
                 result.ErrorMessage = $"Invalid operation: {value}. Use sum, product, avg, min, or max.";
             }
@@ -214,9 +311,12 @@ public static class CalcCommandExtensions
             var value = result.GetValueForOption(precisionOption);
             if (value is null) return;
 
-            if (!int.TryParse(value, out var intValue) || intValue < 0 || intValue > 10)
+            var rangeAttr = ReflectionBinder.GetValidationAttribute<CalcModel, ValidRangeAttribute>("Precision");
+            if (rangeAttr is null) return;
+
+            if (!int.TryParse(value, out var intValue) || intValue < rangeAttr.Min || intValue > rangeAttr.Max)
             {
-                result.ErrorMessage = "Precision must be between 0 and 10.";
+                result.ErrorMessage = $"Precision must be between {rangeAttr.Min} and {rangeAttr.Max}.";
             }
         });
 
@@ -228,12 +328,10 @@ public static class CalcCommandExtensions
 
         statsSubCommand.SetHandler((InvocationContext context) =>
         {
-            var model = new CalcStatsModel
-            {
-                Numbers = context.ParseResult.GetValueForArgument(numbersArgument),
-                Percentiles = context.ParseResult.GetValueForOption(percentilesOption),
-                Verbose = context.ParseResult.GetValueForOption(verboseOption)
-            };
+            var model = new CalcStatsModel();
+            ReflectionBinder.SetProperty(model, "Numbers", context.ParseResult.GetValueForArgument(numbersArgument));
+            ReflectionBinder.SetProperty(model, "Percentiles", context.ParseResult.GetValueForOption(percentilesOption));
+            ReflectionBinder.SetProperty(model, "Verbose", context.ParseResult.GetValueForOption(verboseOption));
 
             if (model.Numbers is null || model.Numbers.Length == 0)
             {
@@ -247,7 +345,7 @@ public static class CalcCommandExtensions
             {
                 try
                 {
-                    var val = Convert.ToDouble(n, CultureInfo.InvariantCulture);
+                    var val = (double)ReflectionBinder.DynamicConvert(n, "System.Double")!;
                     parsed.Add(val);
                 }
                 catch
@@ -285,13 +383,14 @@ public static class CalcCommandExtensions
 
         calcCommand.SetHandler((InvocationContext context) =>
         {
-            var model = new CalcModel
-            {
-                Numbers = context.ParseResult.GetValueForArgument(numbersArgument),
-                Operation = context.ParseResult.GetValueForOption(operationOption) ?? "sum",
-                Precision = int.Parse(context.ParseResult.GetValueForOption(precisionOption)!, CultureInfo.InvariantCulture),
-                Verbose = context.ParseResult.GetValueForOption(verboseOption)
-            };
+            var model = new CalcModel();
+            ReflectionBinder.SetProperty(model, "Numbers", context.ParseResult.GetValueForArgument(numbersArgument));
+            ReflectionBinder.SetProperty(model, "Operation", context.ParseResult.GetValueForOption(operationOption) ?? "sum");
+
+            var precisionStr = context.ParseResult.GetValueForOption(precisionOption);
+            ReflectionBinder.SetProperty(model, "Precision", (int)ReflectionBinder.DynamicConvert(precisionStr, "System.Int32")!);
+
+            ReflectionBinder.SetProperty(model, "Verbose", context.ParseResult.GetValueForOption(verboseOption));
 
             if (model.Numbers is null || model.Numbers.Length == 0)
             {
@@ -357,15 +456,17 @@ public static class TaskCommandExtensions
         {
             var value = result.GetValueForArgument(titleArgument);
 
-            if (string.IsNullOrWhiteSpace(value))
+            var requiredAttr = ReflectionBinder.GetValidationAttribute<TaskModel, RequiredFieldAttribute>("Title");
+            if (requiredAttr is not null && string.IsNullOrWhiteSpace(value))
             {
-                result.ErrorMessage = "Title cannot be empty.";
+                result.ErrorMessage = requiredAttr.ErrorMessage;
                 return;
             }
 
-            if (value.Length > 100)
+            var maxLenAttr = ReflectionBinder.GetValidationAttribute<TaskModel, MaxFieldLengthAttribute>("Title");
+            if (maxLenAttr is not null && value.Length > maxLenAttr.MaxLength)
             {
-                result.ErrorMessage = "Title must be 100 characters or fewer.";
+                result.ErrorMessage = maxLenAttr.ErrorMessage;
             }
         });
 
@@ -378,9 +479,14 @@ public static class TaskCommandExtensions
             var value = result.GetValueForOption(priorityOption);
             if (value is null) return;
 
-            if (!Enum.GetNames<Priority>().Any(n => n.Equals(value, StringComparison.OrdinalIgnoreCase)))
+            var enumAttr = ReflectionBinder.GetValidationAttribute<TaskModel, DynamicEnumTypeAttribute>("Priority");
+            if (enumAttr is not null)
             {
-                result.ErrorMessage = $"Invalid priority: {value}. Use low, medium, high, or critical.";
+                var enumType = Type.GetType(enumAttr.EnumTypeName);
+                if (enumType is not null && !Enum.GetNames(enumType).Any(n => n.Equals(value, StringComparison.OrdinalIgnoreCase)))
+                {
+                    result.ErrorMessage = $"Invalid priority: {value}. Use low, medium, high, or critical.";
+                }
             }
         });
 
@@ -420,16 +526,15 @@ public static class TaskCommandExtensions
 
         taskCommand.SetHandler((InvocationContext context) =>
         {
-            var model = new TaskModel
-            {
-                Title = context.ParseResult.GetValueForArgument(titleArgument),
-                Priority = context.ParseResult.GetValueForOption(priorityOption) ?? "medium",
-                Due = context.ParseResult.GetValueForOption(dueOption),
-                Tags = context.ParseResult.GetValueForOption(tagsOption),
-                Verbose = context.ParseResult.GetValueForOption(verboseOption)
-            };
+            var model = new TaskModel();
+            ReflectionBinder.SetProperty(model, "Title", context.ParseResult.GetValueForArgument(titleArgument));
+            ReflectionBinder.SetProperty(model, "Priority", context.ParseResult.GetValueForOption(priorityOption) ?? "medium");
+            ReflectionBinder.SetProperty(model, "Due", context.ParseResult.GetValueForOption(dueOption));
+            ReflectionBinder.SetProperty(model, "Tags", context.ParseResult.GetValueForOption(tagsOption));
+            ReflectionBinder.SetProperty(model, "Verbose", context.ParseResult.GetValueForOption(verboseOption));
 
-            var displayPriority = Enum.Parse<Priority>(model.Priority, ignoreCase: true);
+            var enumAttr = ReflectionBinder.GetValidationAttribute<TaskModel, DynamicEnumTypeAttribute>("Priority");
+            var displayPriority = ReflectionBinder.DynamicConvert(model.Priority, enumAttr!.EnumTypeName);
 
             if (model.Verbose)
             {
@@ -441,7 +546,7 @@ public static class TaskCommandExtensions
 
             if (model.Due is not null)
             {
-                var dateRange = AotSafeHelpers.CreateDateRange(model.Due)!;
+                var dateRange = (DateRange)ReflectionBinder.CreateDateRange(model.Due)!;
                 context.Console.Out.Write($"Due: {dateRange.Start:yyyy-MM-dd} to {dateRange.End:yyyy-MM-dd}" + Environment.NewLine);
             }
 
@@ -481,15 +586,14 @@ public static class EnumInfoCommandExtensions
 
         enumInfoCommand.SetHandler((InvocationContext context) =>
         {
-            var model = new EnumInfoModel
-            {
-                EnumName = context.ParseResult.GetValueForArgument(enumNameArgument),
-                Format = context.ParseResult.GetValueForOption(formatOption) ?? "Text",
-                ShowAll = context.ParseResult.GetValueForOption(showAllOption),
-                Verbose = context.ParseResult.GetValueForOption(verboseOption)
-            };
+            var model = new EnumInfoModel();
+            ReflectionBinder.SetProperty(model, "EnumName", context.ParseResult.GetValueForArgument(enumNameArgument));
+            ReflectionBinder.SetProperty(model, "Format", context.ParseResult.GetValueForOption(formatOption) ?? "Text");
+            ReflectionBinder.SetProperty(model, "ShowAll", context.ParseResult.GetValueForOption(showAllOption));
+            ReflectionBinder.SetProperty(model, "Verbose", context.ParseResult.GetValueForOption(verboseOption));
 
-            var format = Enum.Parse<OutputFormat>(model.Format, ignoreCase: true);
+            var enumAttr = ReflectionBinder.GetValidationAttribute<EnumInfoModel, DynamicEnumTypeAttribute>("Format");
+            var format = (OutputFormat)ReflectionBinder.DynamicConvert(model.Format, enumAttr!.EnumTypeName)!;
 
             if (model.Verbose)
             {
@@ -498,18 +602,18 @@ public static class EnumInfoCommandExtensions
 
             if (model.ShowAll)
             {
-                PrintEnumValues<Priority>(context, "Priority", format);
-                PrintEnumValues<OutputFormat>(context, "OutputFormat", format);
+                PrintEnumValuesDynamic(context, "SCNativeAOTDemo.Priority", "Priority", format);
+                PrintEnumValuesDynamic(context, "SCNativeAOTDemo.OutputFormat", "OutputFormat", format);
                 return;
             }
 
             switch (model.EnumName.ToLowerInvariant())
             {
                 case "priority":
-                    PrintEnumValues<Priority>(context, "Priority", format);
+                    PrintEnumValuesDynamic(context, "SCNativeAOTDemo.Priority", "Priority", format);
                     break;
                 case "outputformat":
-                    PrintEnumValues<OutputFormat>(context, "OutputFormat", format);
+                    PrintEnumValuesDynamic(context, "SCNativeAOTDemo.OutputFormat", "OutputFormat", format);
                     break;
                 default:
                     context.Console.Error.Write($"Unknown enum: {model.EnumName}. Use Priority or OutputFormat." + Environment.NewLine);
@@ -523,11 +627,16 @@ public static class EnumInfoCommandExtensions
     }
 
     /// <summary>
-    /// Prints enum values using compile-time generic type resolution.
+    /// Prints enum values for the given type name.
     /// </summary>
-    private static void PrintEnumValues<TEnum>(InvocationContext context, string displayName, OutputFormat format) where TEnum : struct, Enum
+    private static void PrintEnumValuesDynamic(InvocationContext context, string enumTypeName, string displayName, OutputFormat format)
     {
-        var values = AotSafeHelpers.GetEnumValues<TEnum>();
+        var (valuesArray, names) = ReflectionBinder.GetEnumInfo(enumTypeName);
+        var values = new List<(string Name, int Value)>();
+        for (var i = 0; i < names.Length; i++)
+        {
+            values.Add((names[i], Convert.ToInt32(valuesArray.GetValue(i))));
+        }
 
         switch (format)
         {
